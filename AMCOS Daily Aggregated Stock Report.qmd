@@ -1,0 +1,221 @@
+---
+title: "Daily Aggregated Beans Stock Report"
+author: "SAKiRP"
+date: "`r Sys.Date()`"
+format: pdf
+
+---
+
+## Aggregation Summary
+
+Below are the amount of bean stock currently aggregated in AMCOS in Kigoma.
+
+```{r, include=FALSE}
+#| label: load-pkgs
+#| code-summary: "Packages"
+#| message: false
+
+library(tidyverse)  
+library(chronicle)      
+library(RPostgres)
+library(httr)
+
+con = DBI::dbConnect(odbc::odbc(), "PostgreSAKiRP")
+waeo = dbReadTable(con,"waeos")
+district = dbReadTable(con, "districts")
+ward = dbReadTable(con,"wards")
+village = dbReadTable(con,"villages")
+faab = dbReadTable(con,"faab_coach")
+amcos = dbReadTable(con,"amcos")
+
+stock_url = "https://kc.humanitarianresponse.info/api/v1/data/1026275.csv"
+stock_rawdata = GET(stock_url,authenticate(Sys.getenv("sakirp_user"),Sys.getenv("sakirp_pw")))
+stock_content = content(stock_rawdata,"raw",encoding="UTF-8")
+stock_data_raw = read_csv(stock_content) %>% 
+  janitor::clean_names()
+
+stock_data_clean = stock_data_raw %>% 
+  mutate(
+    survey_info_waeo = na_if(survey_info_waeo,"n/a"),
+    survey_info_waeo = as.numeric(survey_info_waeo),
+    survey_info_faab = na_if(survey_info_faab,"n/a"),
+    survey_info_faab = as.numeric(survey_info_faab)
+  ) %>% 
+  rename(
+    njano_in = ends_with("njano_in"),
+    stock_beans = ends_with("closing_stock_bt"),
+    stock_calima = survey_info_summary_beans_closing_stock_calimat,
+    stock_red = survey_info_summary_beans_closing_stock_redt,
+    stock_uyole = survey_info_summary_beans_closing_stock_njano_uyolet,
+    stock_njano = survey_info_summary_beans_closing_stock_njanot
+  ) %>% 
+  left_join(district, by=c("survey_info_district"="id")) %>% 
+  left_join(ward, by=c("survey_info_ward"="id")) %>% 
+  left_join(waeo, by=c("survey_info_waeo"="id")) %>% 
+  left_join(faab, by=c("survey_info_faab"="id")) %>% 
+  left_join(amcos, by=c("survey_info_amcos"="id")) %>%
+  mutate(
+    data_collector = case_when(
+      !is.na(waeo) ~ waeo,
+      !is.na(name) ~ name
+    )
+  )
+
+faab_data = stock_data_clean %>% 
+  filter(!is.na(survey_info_faab))
+
+waeo_data = stock_data_clean %>% 
+  filter(!is.na(survey_info_waeo))
+
+warehouse_stock = function(data) {
+  data %>% 
+    select(endtime,district=district.x,ward=ward.x,data_collector,
+           amcos,stock_beans) %>% 
+    group_by(district,ward,amcos) %>% 
+    filter(endtime == max(endtime)) %>% arrange(amcos)
+}
+
+warehouse_variety_stock = function(data) {
+  data %>% 
+    select(endtime,District=district.x,
+           Ward = ward.x,amcos,data_collector,stock_calima,stock_red,stock_njano,
+           stock_uyole,stock_beans) %>% 
+    group_by(District,Ward,amcos) %>% 
+    filter(endtime == max(endtime)) %>% 
+    arrange(amcos)
+}
+
+
+faab_data_summary = warehouse_stock(faab_data) %>%
+  ungroup() %>% 
+  mutate(
+    `Data Entry` = lubridate::ymd(as.Date(endtime)),.before=district,
+    `Target (MT)` = case_when(
+      amcos=="Muhange" ~ 250,
+      amcos=="Nkuchikeka" ~ 150,
+      amcos=="Kurugongo" ~ 144,
+      amcos=="Kanyonza" ~ 320,
+      amcos=="Kitahana" ~ 88,
+      amcos=="Motomoto" ~ 152,
+      amcos=="Ruti" ~ 210,
+      amcos=="Twikome" ~ 202,
+      amcos=="Ubhumwe" ~ 123,
+      amcos=="Kiziguzigu" ~ 410,
+      amcos=="Kibondo-Mjini" ~ 140,
+      amcos=="Kibondo-Bunyambo" ~ 140,
+      amcos=="Nyakitonto" ~ 330,
+      amcos=="Kaziju" ~ 90,
+      amcos=="Nyamuki" ~ 15
+    ),
+    `Actual (MT)` = round((stock_beans/1000),1),
+    Progress = round((`Actual (MT)`/`Target (MT)`)*100,0)
+  ) %>% 
+  select(`Data Entry`,District=district,Ward=ward,AMCOS=amcos,`Target (MT)`,`Actual (MT)`,Progress) %>% 
+  arrange(-`Actual (MT)`)
+
+total_beans = sum(faab_data_summary$`Actual (MT)`)
+
+variety_data_summary = warehouse_variety_stock(faab_data) %>% 
+  ungroup() %>% 
+  mutate(
+    `Data Entry` = lubridate::ymd(as.Date(endtime)),.before=District,
+    `Rose Coco (MT)` = round((as.numeric(stock_calima)/1000),1),
+    `Red Kidney (MT)` = round((as.numeric(stock_red)/1000),1),
+    `Kigoma Njano (MT)` = round((as.numeric(stock_njano)/1000),1),
+    `Uyole Njano (MT)` = round((as.numeric(stock_uyole)/1000),1),
+    `Actual (MT)` = round((stock_beans/1000),1),
+  ) %>% 
+  select(
+    `Data Entry`,District,Ward,AMCOS=amcos,
+    `Rose Coco (MT)`:`Actual (MT)`
+  ) %>% arrange(-`Actual (MT)`)
+
+```
+
+There is a total of **`r total_beans` tonnes** of aggregated beans as of **`r Sys.Date()`** .
+
+@fig-histogram is a graphical summary of available bean stock at AMCOS warehouses.
+
+```{r}
+#| echo: false
+#| label: fig-histogram
+#| fig-cap: "Aggregated beans stock"
+#| fig-height: 6
+#| fig-width: 10
+
+plot = ggplot(faab_data_summary, aes(reorder(AMCOS,`Actual (MT)`),`Actual (MT)`)) +
+  geom_col() + 
+  coord_flip() +
+  theme_bw() +
+  xlab(NULL) + 
+  ylab(NULL) +
+  #labs(title = "Aggregated stocks at AMCOS warehouses") +
+  theme(text = element_text(size = 20)) +
+  geom_text(aes(label = `Actual (MT)`), hjust = 1.2,colour="white")
+
+plot
+```
+
+The tabular summary is as in @tbl-summary:
+
+```{r}
+#| echo: false
+#| label: tbl-summary
+#| tbl-cap: "Aggregated beans (Metric Tonnes)"
+
+faab_data_summary %>% 
+  mutate(
+    `Actual (MT)` = kableExtra::cell_spec(
+      `Actual (MT)`, background = ifelse(Progress > 70,"green",
+                                    ifelse(Progress < 30,"red","orange"))),
+    `Last Update (Hours)` = as.double(difftime(lubridate::ymd(`Data Entry`),
+                   lubridate::ymd(lubridate::today()),
+                   units = "hours")),
+    `Data Entry` = kableExtra::cell_spec(
+      `Data Entry`, background = ifelse(`Last Update (Hours)` < -24,"red",
+                                    "green"))
+  ) %>% 
+  select(-Progress) %>% 
+  kableExtra::kable(escape = FALSE,format = "latex", booktabs = T) %>% 
+  kableExtra::kable_styling(latex_options="scale_down")
+
+```
+::: callout-warning
+Data Entry color codes are: red = \> 24 hours stale, green = \< 24 hours stale
+
+:::
+
+::: callout-note
+Progress color codes are: red = 0-30%, orange = 30-70% and green = \>70%.
+
+Black = Not Available
+:::
+
+@tbl-variety summarises bean varieties available as of **`r Sys.Date()`** .
+
+```{r variety_data_summary}
+#| echo: false
+#| label: tbl-variety
+#| tbl-cap: "Available bean varieties"
+variety_data_summary %>% 
+  mutate(
+    `Rose Coco (MT)` = kableExtra::cell_spec(
+      `Rose Coco (MT)`, background = ifelse(`Rose Coco (MT)` %in% c(0,NA),"black",
+                                    "white")),
+    `Red Kidney (MT)` = kableExtra::cell_spec(
+      `Red Kidney (MT)`, background = ifelse(`Red Kidney (MT)` %in% c(0,NA),"black",
+                                    "white")),
+    `Kigoma Njano (MT)` = kableExtra::cell_spec(
+      `Kigoma Njano (MT)`, background = ifelse(`Kigoma Njano (MT)` %in% c(0,NA),"black",
+                                    "white")),
+     `Uyole Njano (MT)` = kableExtra::cell_spec(
+      `Uyole Njano (MT)`, background = ifelse(`Uyole Njano (MT)` %in% c(0,NA),"black",
+                                    "white"))
+  ) %>% 
+  kableExtra::kable(escape = FALSE,format = "latex", booktabs = T) %>% 
+  kableExtra::kable_styling(latex_options="scale_down")
+
+
+```
+
+<!--# ADD SECTION HEADING FOR REFERENCES HERE -->
