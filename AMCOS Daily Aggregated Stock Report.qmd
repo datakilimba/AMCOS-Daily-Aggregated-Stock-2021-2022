@@ -1,10 +1,23 @@
 ---
-title: "Daily Aggregated Beans Stock Report"
-author: "SAKiRP"
+title: |
+  ![](logo.png)  
+  Daily Aggregeted Beans Stock Report
+author: |
+  SAKiRP Project,  
+  Enabel,    
+  P.O.Box 24,  
+  Kigoma,  
+  Tanzania
 date: "`r Sys.Date()`"
-format: pdf
-
+format: 
+  pdf: 
+    fig-pos: 'H'
+header-includes:
+   \usepackage{float}
+   \floatplacement{table}{H}
 ---
+
+\newpage
 
 ## Aggregation Summary
 
@@ -15,8 +28,11 @@ Below are the amount of bean stock currently aggregated in AMCOS in Kigoma.
 #| code-summary: "Packages"
 #| message: false
 
+# file.copy(from = "AMCOS-Daily-Aggregated-Stock-Report.pdf",
+#           to = paste0('AMCOS-Daily-Aggregated-Stock-Report_',lubridate::today(),'_',paste0(lubridate::hour(lubridate::now()),
+#           lubridate::minute(lubridate::now())),'.pdf'))
+
 library(tidyverse)  
-library(chronicle)      
 library(RPostgres)
 library(httr)
 
@@ -32,15 +48,23 @@ stock_url = "https://kc.humanitarianresponse.info/api/v1/data/1026275.csv"
 stock_rawdata = GET(stock_url,authenticate(Sys.getenv("sakirp_user"),Sys.getenv("sakirp_pw")))
 stock_content = content(stock_rawdata,"raw",encoding="UTF-8")
 stock_data_raw = read_csv(stock_content) %>% 
-  janitor::clean_names()
+  janitor::clean_names() %>% 
+  mutate(
+    across(
+      where(is.character), ~ str_replace(.,pattern = "n/a","0")
+    )
+  )
 
-stock_data_clean = stock_data_raw %>% 
+bean_stock_data_clean = stock_data_raw %>% 
+  filter(
+    survey_info_crop==1
+  ) %>% 
   mutate(
     survey_info_waeo = na_if(survey_info_waeo,"n/a"),
     survey_info_waeo = as.numeric(survey_info_waeo),
     survey_info_faab = na_if(survey_info_faab,"n/a"),
     survey_info_faab = as.numeric(survey_info_faab)
-  ) %>% 
+  )  %>% 
   rename(
     njano_in = ends_with("njano_in"),
     stock_beans = ends_with("closing_stock_bt"),
@@ -58,13 +82,18 @@ stock_data_clean = stock_data_raw %>%
     data_collector = case_when(
       !is.na(waeo) ~ waeo,
       !is.na(name) ~ name
-    )
-  )
+    ),
+    stock_beans = as.numeric(stock_beans),
+    stock_calima = as.numeric(stock_calima),
+    stock_red = as.numeric(stock_red),
+    stock_njano = as.numeric(stock_njano),
+    stock_uyole = as.numeric(stock_uyole)
+  ) 
 
-faab_data = stock_data_clean %>% 
+faab_data = bean_stock_data_clean %>% 
   filter(!is.na(survey_info_faab))
 
-waeo_data = stock_data_clean %>% 
+waeo_data = bean_stock_data_clean %>% 
   filter(!is.na(survey_info_waeo))
 
 warehouse_stock = function(data) {
@@ -167,17 +196,54 @@ faab_data_summary %>%
   mutate(
     `Actual (MT)` = kableExtra::cell_spec(
       `Actual (MT)`, background = ifelse(Progress > 70,"green",
-                                    ifelse(Progress < 30,"red","orange"))),
+                                         ifelse(Progress < 30,"red","orange"))),
     `Last Update (Hours)` = as.double(difftime(lubridate::ymd(`Data Entry`),
-                   lubridate::ymd(lubridate::today()),
-                   units = "hours")),
+                                               lubridate::ymd(lubridate::today()),
+                                               units = "hours")),
     `Data Entry` = kableExtra::cell_spec(
       `Data Entry`, background = ifelse(`Last Update (Hours)` < -24,"red",
-                                    "green"))
+                                        "green"))
   ) %>% 
   select(-Progress) %>% 
   kableExtra::kable(escape = FALSE,format = "latex", booktabs = T) %>% 
-  kableExtra::kable_styling(latex_options="scale_down")
+  kableExtra::kable_styling(latex_options=c("scale_down","float_left"))
+
+```
+
+@tbl-variety summarises bean varieties available as of **`r Sys.Date()`** .
+
+```{r variety_data_summary}
+#| echo: false
+#| label: tbl-variety
+#| tbl-cap: "Available bean varieties"
+variety_data_summary %>% 
+  select(-`Data Entry`) %>% 
+  mutate(
+    `Rose Coco (MT)` = kableExtra::cell_spec(
+      `Rose Coco (MT)`, background = ifelse(`Rose Coco (MT)` %in% c(0,NA),"black",
+                                            "white")),
+    `Red Kidney (MT)` = kableExtra::cell_spec(
+      `Red Kidney (MT)`, background = ifelse(`Red Kidney (MT)` %in% c(0,NA),"black",
+                                             "white")),
+    `Kigoma Njano (MT)` = kableExtra::cell_spec(
+      `Kigoma Njano (MT)`, background = ifelse(`Kigoma Njano (MT)` %in% c(0,NA),"black",
+                                               "white")),
+    `Uyole Njano (MT)` = kableExtra::cell_spec(
+      `Uyole Njano (MT)`, background = ifelse(`Uyole Njano (MT)` %in% c(0,NA),"black",
+                                              "white"))
+  ) %>% 
+  kableExtra::kable(escape = FALSE,format = "latex", booktabs = T) %>% 
+  kableExtra::kable_styling(latex_options=c("scale_down","float_left"))
+
+
+wb = xlsx::createWorkbook(type="xlsx")
+total_sheet = xlsx::createSheet(wb, sheetName = "Total Beans")
+variety_sheet = xlsx::createSheet(wb, sheetName = "Variety Beans")
+
+xlsx::addDataFrame(faab_data_summary,total_sheet)
+xlsx::addDataFrame(variety_data_summary,variety_sheet)
+
+xlsx::saveWorkbook(wb,here::here(paste0("AMCOS-Daily-Aggregated-Stock-Report_",lubridate::today(),".xlsx")))
 
 ```
 ::: callout-warning
@@ -191,31 +257,7 @@ Progress color codes are: red = 0-30%, orange = 30-70% and green = \>70%.
 Black = Not Available
 :::
 
-@tbl-variety summarises bean varieties available as of **`r Sys.Date()`** .
-
-```{r variety_data_summary}
-#| echo: false
-#| label: tbl-variety
-#| tbl-cap: "Available bean varieties"
-variety_data_summary %>% 
-  mutate(
-    `Rose Coco (MT)` = kableExtra::cell_spec(
-      `Rose Coco (MT)`, background = ifelse(`Rose Coco (MT)` %in% c(0,NA),"black",
-                                    "white")),
-    `Red Kidney (MT)` = kableExtra::cell_spec(
-      `Red Kidney (MT)`, background = ifelse(`Red Kidney (MT)` %in% c(0,NA),"black",
-                                    "white")),
-    `Kigoma Njano (MT)` = kableExtra::cell_spec(
-      `Kigoma Njano (MT)`, background = ifelse(`Kigoma Njano (MT)` %in% c(0,NA),"black",
-                                    "white")),
-     `Uyole Njano (MT)` = kableExtra::cell_spec(
-      `Uyole Njano (MT)`, background = ifelse(`Uyole Njano (MT)` %in% c(0,NA),"black",
-                                    "white"))
-  ) %>% 
-  kableExtra::kable(escape = FALSE,format = "latex", booktabs = T) %>% 
-  kableExtra::kable_styling(latex_options="scale_down")
 
 
-```
 
 <!--# ADD SECTION HEADING FOR REFERENCES HERE -->
