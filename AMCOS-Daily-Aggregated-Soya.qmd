@@ -1,0 +1,134 @@
+---
+title: |
+  ![](logo.png)  
+  Daily Aggregeted Soya Beans Stock Report
+author: |
+  SAKiRP Project,  
+  Enabel,    
+  P.O.Box 24,  
+  Kigoma,  
+  Tanzania
+date: "`r Sys.Date()`"
+format: 
+  pdf: 
+    fig-pos: 'H'
+header-includes:
+   \usepackage{float}
+   \floatplacement{table}{H}
+---
+
+\newpage
+
+```{r setup, include=FALSE}
+#| message: false
+#| echo: false
+library(tidyverse)  
+library(RPostgres)
+library(httr)
+
+con = DBI::dbConnect(odbc::odbc(), "PostgreSAKiRP")
+waeo = dbReadTable(con,"waeos")
+district = dbReadTable(con, "districts")
+ward = dbReadTable(con,"wards")
+village = dbReadTable(con,"villages")
+faab = dbReadTable(con,"faab_coach")
+amcos = dbReadTable(con,"amcos")
+
+stock_url = "https://kc.humanitarianresponse.info/api/v1/data/1026275.csv"
+stock_rawdata = GET(stock_url,authenticate(Sys.getenv("sakirp_user"),Sys.getenv("sakirp_pw")))
+stock_content = content(stock_rawdata,"raw",encoding="UTF-8")
+stock_data_raw = read_csv(stock_content) %>% 
+  janitor::clean_names()
+
+stock_data_clean = stock_data_raw %>% 
+  mutate(
+    survey_info_waeo = na_if(survey_info_waeo,"n/a"),
+    survey_info_waeo = as.numeric(survey_info_waeo),
+    survey_info_faab = na_if(survey_info_faab,"n/a"),
+    survey_info_faab = as.numeric(survey_info_faab)
+  ) %>% 
+  filter(survey_info_crop == 4) %>% 
+  left_join(district, by=c("survey_info_district"="id")) %>% 
+  left_join(ward, by=c("survey_info_ward"="id")) %>% 
+  left_join(waeo, by=c("survey_info_waeo"="id")) %>% 
+  left_join(faab, by=c("survey_info_faab"="id")) %>% 
+  left_join(amcos, by=c("survey_info_amcos"="id")) %>% 
+  mutate(
+    data_collector = case_when(
+      !is.na(waeo) ~ waeo,
+      !is.na(name) ~ name
+    ),
+    stock_soya = as.numeric(survey_info_closing_stock_soya_grp_closing_stock_soya_y)+
+      as.numeric(survey_info_incoming_soya_soya_in)-as.numeric(survey_info_outgoing_soya_soya_out)
+  )
+
+faab_data = stock_data_clean %>% 
+  filter(!is.na(survey_info_faab))
+
+waeo_data = stock_data_clean %>% 
+  filter(!is.na(survey_info_waeo))
+
+warehouse_stock = function(data) {
+  data %>% 
+    select(endtime,district=district.x,ward=ward.x,data_collector,
+           amcos,stock_soya) %>% 
+    group_by(district,ward,amcos) %>% 
+    filter(endtime == max(endtime)) %>% arrange(amcos)
+}
+
+faab_data_summary = warehouse_stock(faab_data) %>%
+  ungroup() %>% 
+  mutate(
+    `Data Entry` = lubridate::ymd(as.Date(endtime)),.before=district,
+    `Actual (MT)` = round((stock_soya/1000),1),
+  ) %>% 
+  select(`Data Entry`,District=district,Ward=ward,AMCOS=amcos,`Actual (MT)`) %>% 
+  arrange(-`Actual (MT)`)
+
+total_soya = sum(faab_data_summary$`Actual (MT)`)
+
+```
+
+There is a total of **`r total_soya` tonnes** of aggregated soya as of **`r Sys.Date()`** .
+
+@fig-histogram is a graphical summary of available bean stock at AMCOS warehouses.
+
+```{r summary}
+#| echo: false
+#| label: fig-histogram
+#| fig-cap: "Aggregated beans stock"
+#| fig-height: 6
+#| fig-width: 10
+
+summary = ggplot(faab_data_summary, aes(reorder(AMCOS,`Actual (MT)`),`Actual (MT)`)) +
+  geom_col() + 
+  coord_flip() +
+  theme_bw() +
+  xlab(NULL) + 
+  ylab(NULL) +
+  theme(text = element_text(size = 20)) +
+  geom_text(aes(label = `Actual (MT)`), hjust = 1.2,colour="white")
+
+summary
+```
+The tabular summary is as in @tbl-summary:
+
+```{r faab-summary}
+#| echo: false
+#| label: tbl-summary
+#| tbl-cap: "Aggregated beans (Metric Tonnes)"
+
+faab_data_summary %>% 
+  mutate(
+    
+    `Last Update (Hours)` = as.double(difftime(lubridate::ymd(`Data Entry`),
+                                               lubridate::ymd(lubridate::today()),
+                                               units = "hours")),
+    `Data Entry` = kableExtra::cell_spec(
+      `Data Entry`, background = ifelse(`Last Update (Hours)` < -24,"red",
+                                        "green"))
+  ) %>% 
+  kableExtra::kable(escape = FALSE,format = "latex", booktabs = T) %>% 
+  kableExtra::kable_styling(latex_options=c("scale_down","float_left"))
+
+```

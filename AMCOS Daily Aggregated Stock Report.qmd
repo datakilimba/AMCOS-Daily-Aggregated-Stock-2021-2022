@@ -36,13 +36,12 @@ library(tidyverse)
 library(RPostgres)
 library(httr)
 
-con = DBI::dbConnect(odbc::odbc(), "PostgreSAKiRP")
-waeo = dbReadTable(con,"waeos")
-district = dbReadTable(con, "districts")
-ward = dbReadTable(con,"wards")
-village = dbReadTable(con,"villages")
-faab = dbReadTable(con,"faab_coach")
-amcos = dbReadTable(con,"amcos")
+waeo = readxl::read_xlsx(here::here("sakirp_data.xlsx"),sheet = 'WAEOs')
+district = readxl::read_xlsx(here::here("sakirp_data.xlsx"),sheet = 'Districts')
+ward = readxl::read_xlsx(here::here("sakirp_data.xlsx"),sheet = 'Wards')
+village = readxl::read_xlsx(here::here("sakirp_data.xlsx"),sheet = 'Villages')
+faab = readxl::read_xlsx(here::here("sakirp_data.xlsx"),sheet = 'FAAB')
+amcos = readxl::read_xlsx(here::here("sakirp_data.xlsx"),sheet = 'AMCOS')
 
 stock_url = "https://kc.humanitarianresponse.info/api/v1/data/1026275.csv"
 stock_rawdata = GET(stock_url,authenticate(Sys.getenv("sakirp_user"),Sys.getenv("sakirp_pw")))
@@ -178,7 +177,6 @@ plot = ggplot(faab_data_summary, aes(reorder(AMCOS,`Actual (MT)`),`Actual (MT)`)
   theme_bw() +
   xlab(NULL) + 
   ylab(NULL) +
-  #labs(title = "Aggregated stocks at AMCOS warehouses") +
   theme(text = element_text(size = 20)) +
   geom_text(aes(label = `Actual (MT)`), hjust = 1.2,colour="white")
 
