@@ -234,14 +234,14 @@ variety_data_summary %>%
   kableExtra::kable_styling(latex_options=c("scale_down","float_left"))
 
 
-wb = xlsx::createWorkbook(type="xlsx")
-total_sheet = xlsx::createSheet(wb, sheetName = "Total Beans")
-variety_sheet = xlsx::createSheet(wb, sheetName = "Variety Beans")
+wb = openxlsx::createWorkbook()
+total_sheet = openxlsx::addWorksheet(wb, sheetName = "Total Beans")
+variety_sheet = openxlsx::addWorksheet(wb, sheetName = "Variety Beans")
 
-xlsx::addDataFrame(faab_data_summary,total_sheet)
-xlsx::addDataFrame(variety_data_summary,variety_sheet)
+openxlsx::writeDataTable(wb,x=faab_data_summary,sheet = total_sheet)
+openxlsx::writeDataTable(wb,x=variety_data_summary,sheet = variety_sheet)
 
-xlsx::saveWorkbook(wb,here::here(paste0("AMCOS-Daily-Aggregated-Stock-Report_",lubridate::today(),".xlsx")))
+openxlsx::saveWorkbook(wb,here::here(paste0("AMCOS-Daily-Aggregated-Stock-Report_",lubridate::today(),".xlsx")))
 
 ```
 ::: callout-warning
